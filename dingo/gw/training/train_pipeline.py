@@ -4,7 +4,10 @@ import numpy as np
 import yaml
 import argparse
 import textwrap
-
+import torch
+import torch.multiprocessing as mp
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.distributed import init_process_group, destroy_process_group
 
 from threadpoolctl import threadpool_limits
 
@@ -147,7 +150,7 @@ def prepare_training_resume(checkpoint_name, local_settings, train_dir):
     return pm, wfd
 
 
-def initialize_stage(pm, wfd, stage, num_workers, resume=False):
+def initialize_stage(pm, wfd, stage, num_workers, resume=False, world_size = 1):
     """
     Initializes training based on PosteriorModel metadata and current stage:
         * Builds transforms (based on noise settings for current stage);
@@ -181,8 +184,8 @@ def initialize_stage(pm, wfd, stage, num_workers, resume=False):
     train_loader, test_loader = build_train_and_test_loaders(
         wfd,
         train_settings["data"]["train_fraction"],
-        stage["batch_size"],
-        num_workers,
+        stage["batch_size"] // world_size,
+        num_workers // world_size,
     )
 
     if not resume:
@@ -210,7 +213,7 @@ def initialize_stage(pm, wfd, stage, num_workers, resume=False):
     return train_loader, test_loader
 
 
-def train_stages(pm, wfd, train_dir, local_settings):
+def train_stages(pm, wfd, train_dir, local_settings, rank = 0, world_size = 1):
     """
     Train the network, iterating through the sequence of stages. Stages can change
     certain settings such as the noise characteristics, optimizer, and scheduler settings.
@@ -254,13 +257,13 @@ def train_stages(pm, wfd, train_dir, local_settings):
             print(f"\nBeginning training stage {n}. Settings:")
             print(yaml.dump(stage, default_flow_style=False, sort_keys=False))
             train_loader, test_loader = initialize_stage(
-                pm, wfd, stage, local_settings["num_workers"], resume=False
+                pm, wfd, stage, local_settings["num_workers"], resume=False, world_size=world_size
             )
         else:
             print(f"\nResuming training in stage {n}. Settings:")
             print(yaml.dump(stage, default_flow_style=False, sort_keys=False))
             train_loader, test_loader = initialize_stage(
-                pm, wfd, stage, local_settings["num_workers"], resume=True
+                pm, wfd, stage, local_settings["num_workers"], resume=True, world_size=world_size
             )
         early_stopping = None
         if stage.get("early_stopping"):
@@ -273,6 +276,7 @@ def train_stages(pm, wfd, train_dir, local_settings):
 
         runtime_limits.max_epochs_total = end_epochs[n]
         pm.train(
+            rank,
             train_loader,
             test_loader,
             train_dir=train_dir,
@@ -343,6 +347,26 @@ def parse_args():
 
     return args
 
+def resume_run_main(rank, world_size, checkpoint, local_settings, train_dir):
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "18848"
+    torch.cuda.set_device(rank)
+    init_process_group(backend="nccl", rank=rank, world_size=world_size)
+    local_settings["device"] = rank
+
+    print(f'Init rank {rank}')
+    
+    pm, wfd = prepare_training_resume(
+        checkpoint, local_settings, train_dir
+    )
+
+    pm.network = DDP(pm.network, device_ids=[rank], find_unused_parameters=True)
+
+    with threadpool_limits(limits=1, user_api="blas"):
+        train_stages(pm, wfd, train_dir, local_settings, rank=rank, world_size=world_size)
+    
+    destroy_process_group()
+
 
 def train_local():
     args = parse_args()
@@ -374,24 +398,24 @@ def train_local():
 
         pm, wfd = prepare_training_new(train_settings, args.train_dir, local_settings)
 
+        with threadpool_limits(limits=1, user_api="blas"):
+            complete = train_stages(pm, wfd, args.train_dir, local_settings)
+
+        if complete:
+            if args.exit_command:
+                print(
+                    f"All training stages complete. Executing exit command: {args.exit_command}."
+                )
+                os.system(args.exit_command)
+            else:
+                print("All training stages complete.")
+        else:
+            print("Program terminated due to runtime limit.")
+
     else:
         print("Resuming training run.")
         with open(os.path.join(args.train_dir, "local_settings.yaml"), "r") as f:
             local_settings = yaml.safe_load(f)
-        pm, wfd = prepare_training_resume(
-            args.checkpoint, local_settings, args.train_dir
-        )
-
-    with threadpool_limits(limits=1, user_api="blas"):
-        complete = train_stages(pm, wfd, args.train_dir, local_settings)
-
-    if complete:
-        if args.exit_command:
-            print(
-                f"All training stages complete. Executing exit command: {args.exit_command}."
-            )
-            os.system(args.exit_command)
-        else:
-            print("All training stages complete.")
-    else:
-        print("Program terminated due to runtime limit.")
+        
+        world_size = torch.cuda.device_count()
+        mp.spawn(resume_run_main, args=(world_size, args.checkpoint, local_settings, args.train_dir), nprocs=world_size)

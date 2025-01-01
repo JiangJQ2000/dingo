@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 from typing import Union, Tuple, Iterable
 import bilby
 
@@ -219,18 +220,20 @@ def build_train_and_test_loaders(
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=False,
         pin_memory=True,
-        num_workers=num_workers,
+        # num_workers=num_workers,
         worker_init_fn=fix_random_seeds,
+        sampler=DistributedSampler(train_dataset),
     )
     test_loader = DataLoader(
         test_dataset,
         batch_size=batch_size,
         shuffle=False,
         pin_memory=True,
-        num_workers=num_workers,
+        # num_workers=num_workers,
         worker_init_fn=fix_random_seeds,
+        sampler=DistributedSampler(train_dataset),
     )
 
     return train_loader, test_loader

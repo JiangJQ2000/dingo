@@ -53,6 +53,8 @@ def train_unconditional_density_estimator(
     model: NormalizingFlowPosteriorModel
         trained density estimator
     """
+    raise Exception("DPP IS NOT SUPPORT train_unconditional_density_estimator YET !!!!!!!")
+    
     samples = result.samples
     # Process samples: select parameters, normalize, and convert to torch tensor
     if "parameters" in settings["data"] and settings["data"]["parameters"]:

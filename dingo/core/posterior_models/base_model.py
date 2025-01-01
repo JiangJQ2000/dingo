@@ -188,8 +188,6 @@ class BasePosteriorModel(ABC):
         """
         Put model to device, and set self.device accordingly.
         """
-        if device not in ("cpu", "cuda"):
-            raise ValueError(f"Device should be either cpu or cuda, got {device}.")
         self.device = torch.device(device)
         # Commented below so that code runs on first cuda device in the case of multiple.
         # if device == 'cuda' and torch.cuda.device_count() > 1:
@@ -317,7 +315,7 @@ class BasePosteriorModel(ABC):
         # machine may have moved the model from 'cuda' to 'cpu'.
         ext = os.path.splitext(model_filename)[-1]
         if ext == ".pt":
-            d = torch.load(model_filename, map_location=device)
+            d = torch.load(model_filename, map_location=torch.device(device))
         elif ext == ".hdf5":
             d = self._load_model_from_hdf5(model_filename)
         else:
@@ -362,6 +360,7 @@ class BasePosteriorModel(ABC):
 
     def train(
         self,
+        rank: int,
         train_loader: torch.utils.data.DataLoader,
         test_loader: torch.utils.data.DataLoader,
         train_dir: str,
@@ -404,6 +403,8 @@ class BasePosteriorModel(ABC):
                 with threadpool_limits(limits=1, user_api="blas"):
                     print(f"\nStart training epoch {self.epoch} with lr {lr}")
                     time_start = time.time()
+                    train_loader.sampler.set_epoch(self.epoch)
+                    print(f'train_loader.sampler.set_epoch({self.epoch=}) fine.')
                     train_loss = train_epoch(self, train_loader)
                     train_time = time.time() - time_start
 
@@ -416,6 +417,7 @@ class BasePosteriorModel(ABC):
                     # Testing
                     print(f"Start testing epoch {self.epoch}")
                     time_start = time.time()
+                    test_loader.sampler.set_epoch(self.epoch)
                     test_loss = test_epoch(self, test_loader)
                     test_time = time.time() - time_start
 
@@ -428,38 +430,39 @@ class BasePosteriorModel(ABC):
                 # scheduler step for learning rate
                 utils.perform_scheduler_step(self.scheduler, test_loss)
 
-                # write history and save model
-                utils.write_history(train_dir, self.epoch, train_loss, test_loss, lr)
-                utils.save_model(self, train_dir, checkpoint_epochs=checkpoint_epochs)
-                if use_wandb:
-                    try:
-                        import wandb
+                if rank == 0:
+                    # write history and save model
+                    utils.write_history(train_dir, self.epoch, train_loss, test_loss, lr)
+                    utils.save_model(self, train_dir, checkpoint_epochs=checkpoint_epochs)
+                    if use_wandb:
+                        try:
+                            import wandb
 
-                        wandb.define_metric("epoch")
-                        wandb.define_metric("*", step_metric="epoch")
-                        wandb.log(
-                            {
-                                "epoch": self.epoch,
-                                "learning_rate": lr[0],
-                                "train_loss": train_loss,
-                                "test_loss": test_loss,
-                                "train_time": train_time,
-                                "test_time": test_time,
-                            }
-                        )
-                    except ImportError:
-                        print("wandb not installed. Skipping logging to wandb.")
+                            wandb.define_metric("epoch")
+                            wandb.define_metric("*", step_metric="epoch")
+                            wandb.log(
+                                {
+                                    "epoch": self.epoch,
+                                    "learning_rate": lr[0],
+                                    "train_loss": train_loss,
+                                    "test_loss": test_loss,
+                                    "train_time": train_time,
+                                    "test_time": test_time,
+                                }
+                            )
+                        except ImportError:
+                            print("wandb not installed. Skipping logging to wandb.")
 
-                if early_stopping is not None:
-                    is_best_model = early_stopping(test_loss)
-                    if is_best_model:
-                        self.save_model(
-                            join(train_dir, "best_model.pt"), save_training_info=False
-                        )
-                    if early_stopping.early_stop:
-                        print("Early stopping")
-                        break
-                print(f"Finished training epoch {self.epoch}.\n")
+                    if early_stopping is not None:
+                        is_best_model = early_stopping(test_loss)
+                        if is_best_model:
+                            self.save_model(
+                                join(train_dir, "best_model.pt"), save_training_info=False
+                            )
+                        if early_stopping.early_stop:
+                            print("Early stopping")
+                            break
+                    print(f"Finished training epoch {self.epoch}.\n")
 
 
 def train_epoch(pm, dataloader):
