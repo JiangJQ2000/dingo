@@ -112,7 +112,10 @@ class GetDetectorTimes(object):
                 # computation does not work on gpu, so do it on cpu
                 ra = ra.cpu()
                 dec = dec.cpu()
-            dt = time_delay_from_geocenter(ifo, ra, dec, self.ref_time)
+            if isinstance(ra, (np.ndarray, torch.Tensor)) and len(ra.shape) == 2:
+                dt = torch.stack([time_delay_from_geocenter(ifo, _ra, _dec, self.ref_time) for _ra, _dec in zip(ra, dec, strict=True)])
+            else:
+                dt = time_delay_from_geocenter(ifo, ra, dec, self.ref_time)
             if type(dt) == torch.Tensor:
                 dt = dt.to(geocent_time.device)
             ifo_time = geocent_time + dt
@@ -249,7 +252,7 @@ class TimeShiftStrain(object):
         elif isinstance(input_sample["waveform"], torch.Tensor):
             strains = input_sample["waveform"]
             dt = [extrinsic_parameters.pop(f"{ifo.name}_time") for ifo in self.ifo_list]
-            dt = torch.stack(dt, 1)
+            dt = torch.stack(dt, -1)
             strains = self.domain.time_translate_data(strains, dt)
 
         else:

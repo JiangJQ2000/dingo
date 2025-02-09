@@ -147,8 +147,9 @@ class Sampler(object):
             # transforms_pre are expected to transform the data in the same way for each
             # requested sample. We therefore apply pre-processing only once.
             x = self.transform_pre(context)
-            # Require a batch dimension for the embedding network.
-            x = x.unsqueeze(0)
+            if x.dim() == 3:
+                # Require a batch dimension for the embedding network.
+                x = x.unsqueeze(0)
             x = [x]
         else:
             if context is not None:
@@ -223,9 +224,10 @@ class Sampler(object):
         # Apply any post-sampling transformation to sampled parameters (e.g.,
         # correction for t_ref) and represent as DataFrame.
         self._post_process(samples)
-        self.samples = pd.DataFrame(samples)
         print(f"Done. This took {time.time() - t0:.1f} s.")
         sys.stdout.flush()
+        return samples
+        self.samples = pd.DataFrame(samples)
 
     def log_prob(self, samples: pd.DataFrame) -> np.ndarray:
         """
@@ -486,23 +488,36 @@ class GNPESampler(Sampler):
             )
 
             d = data_.clone()
-            x["data"] = d.expand(num_samples, *d.shape)
+            if d.dim() == 3:
+                batch_size = None
+                x["data"] = d.expand(num_samples, *d.shape)
+            else:
+                batch_size = d.shape[0]
+                x["data"] = d[...,None,:,:,:].expand(-1, num_samples, -1, -1, -1)
 
             x = self.transform_pre(x)
+
+            if batch_size is not None:
+                x["data"] = x["data"].reshape(batch_size*num_samples, d.shape[-3], d.shape[-2], d.shape[-1])
 
             time_sample_start = time.time()
             self.model.network.eval()
             with torch.no_grad():
                 if "context_parameters" in x:
                     y, log_prob = self.model.sample_and_log_prob(
-                        x["data"], x["context_parameters"]
+                        x["data"],
+                        x["context_parameters"].reshape(batch_size*num_samples, -1) if batch_size is not None else x["context_parameters"]
                     )
                 else:
                     y, log_prob = self.model.sample_and_log_prob(x["data"])
 
-            # Squeeze the extra dimension added by sample_and_log_prob(num_samples=1).
-            y = y.squeeze(1)
-            log_prob = log_prob.squeeze(1)
+            if batch_size is None:
+                # Squeeze the extra dimension added by sample_and_log_prob(num_samples=1).
+                y = y.squeeze(1)
+                log_prob = log_prob.squeeze(1)
+            else:
+                y = y.reshape(batch_size, num_samples, -1)
+                log_prob = log_prob.reshape(batch_size, num_samples)
 
             time_sample_end = time.time()
 

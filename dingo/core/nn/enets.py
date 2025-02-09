@@ -144,11 +144,11 @@ class LinearProjectionRB(nn.Module):
 
     def forward(self, x, **_):
         """RB projection. Additional kwargs (like context) are ignored."""
-        if x.shape[1:] != (self.num_blocks, self.num_channels, self.num_bins):
+        if x.shape[-3:] != (self.num_blocks, self.num_channels, self.num_bins):
             raise ValueError(
                 f"Invalid shape for projection layer. "
                 f"Expected {(self.num_blocks, self.num_channels, self.num_bins)}, "
-                f"got {tuple(x.shape[1:])}."
+                f"got {tuple(x.shape)}."
             )
         out = []
         for ind in range(self.num_blocks):

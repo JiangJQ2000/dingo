@@ -74,7 +74,7 @@ class GNPEBase(ABC):
         # First we sample from the kernel, ensuring the correct data type,
         # and accounting for possible batching.
         if type(g) == torch.Tensor:
-            epsilon = self.kernel[k].sample(len(g))
+            epsilon = self.kernel[k].sample(g.shape)
             epsilon = torch.tensor(epsilon, dtype=g.dtype, device=g.device)
         elif type(g) == np.float64 or type(g) == float:
             epsilon = self.kernel[k].sample()

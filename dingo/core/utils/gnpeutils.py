@@ -49,7 +49,7 @@ class IterationTracker:
         if self.ks_result is None:
             return -np.inf
         else:
-            return min(self.ks_result["pvalue"])
+            return np.min(self.ks_result["pvalue"])
 
     # def remove_outliers(self, x):
     #     xc = np.concatenate([v[None, :] for v in self.x.values()], axis=0)
