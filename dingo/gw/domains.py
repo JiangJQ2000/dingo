@@ -104,6 +104,7 @@ class FrequencyDomain(Domain):
 
         self._sample_frequencies = None
         self._sample_frequencies_torch = None
+        self._device = None
         self._sample_frequencies_torch_cuda = None
         self._frequency_mask = None
 
@@ -259,6 +260,7 @@ class FrequencyDomain(Domain):
             f = self.sample_frequencies
         elif isinstance(data, torch.Tensor):
             if data.is_cuda:
+                self._device = data.device
                 f = self.sample_frequencies_torch_cuda
             else:
                 f = self.sample_frequencies_torch
@@ -363,7 +365,7 @@ class FrequencyDomain(Domain):
     def sample_frequencies_torch_cuda(self):
         if self._sample_frequencies_torch_cuda is None:
             self._sample_frequencies_torch_cuda = self.sample_frequencies_torch.to(
-                "cuda"
+                self._device
             )
         return self._sample_frequencies_torch_cuda
 

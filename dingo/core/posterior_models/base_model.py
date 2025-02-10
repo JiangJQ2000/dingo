@@ -189,8 +189,6 @@ class BasePosteriorModel(ABC):
         """
         Put model to device, and set self.device accordingly.
         """
-        if device not in ("cpu", "cuda"):
-            raise ValueError(f"Device should be either cpu or cuda, got {device}.")
         self.device = torch.device(device)
         # Commented below so that code runs on first cuda device in the case of multiple.
         # if device == 'cuda' and torch.cuda.device_count() > 1:
